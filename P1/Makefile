@@ -1,7 +1,7 @@
 ##############################################################################
 # Fichier : Makefile
 # Description : Script de compilation automatique pour Client/Serveur UDP
-# Auteur : [Votre Nom]
+# Auteur : Malek Ben Attia et salim Younes
 # Date : Décembre 2025
 ##############################################################################
 

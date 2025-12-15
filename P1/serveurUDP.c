@@ -4,7 +4,7 @@
  * Description : Serveur UDP - Reçoit un nombre n et envoie n nombres aléatoires
  * Utilisation : ./serveurUDP <port>
  * Exemple : ./serveurUDP 5000
- * Auteur : [Votre Nom]
+ * Auteur : Malek Ben Attia et salim Younes
  * Date : Décembre 2025
  * ============================================================================
  */

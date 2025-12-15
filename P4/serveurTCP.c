@@ -1,436 +1,384 @@
 /*
- * ============================================================================
- * Fichier : serveurTCP.c
- * Description : Serveur TCP Phase 3 - Multiclient/Multiservice
- * Services : Date, Liste fichiers, Contenu fichier, Durée connexion
- * Utilisation : ./serveurTCP <port>
- * Exemple : ./serveurTCP 6000
- * Compte : admin / admin123
- * Auteur : [Votre Nom]
- * Date : Décembre 2025
- * ============================================================================
+ * ============================================
+ *  SERVEUR TCP MULTISERVICE MULTI-PORT
+ * ============================================
+ * 
+ * Compilation:
+ *   gcc serveurTCP.c -o serveurTCP -lpthread
+ * 
+ * Utilisation:
+ *   ./serveurTCP [username] [password]
+ *   Exemple: ./serveurTCP admin admin123
  */
 
 #include "common.h"
+#include <pthread.h>
 
-/* ============================================================================
- * GESTIONNAIRE DE SIGNAL SIGCHLD
- * ============================================================================ */
-void gestionnaire_sigchld(int sig) {
-    // Récupérer tous les processus fils terminés (éviter les zombies)
-    while (waitpid(-1, NULL, WNOHANG) > 0);
+// Variables globales
+static char global_username[50];
+static char global_password[50];
+static volatile int serveur_actif = 1;
+static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Sockets globaux
+static int sockfd_auth;
+static int sockfd_date;
+static int sockfd_liste;
+static int sockfd_contenu;
+static int sockfd_duree;
+
+/*
+ * Affichage thread-safe
+ */
+void afficher_log(const char *message) {
+    pthread_mutex_lock(&log_mutex);
+    printf("%s", message);
+    fflush(stdout);
+    pthread_mutex_unlock(&log_mutex);
 }
 
-/* ============================================================================
- * SERVICE 1 : DATE ET HEURE SYSTÈME
- * ============================================================================
- * Envoie la date et l'heure actuelles du serveur au format :
- * "Date: JJ/MM/AAAA - Heure: HH:MM:SS"
- * ============================================================================ */
-void service_date(int client_sockfd) {
-    char buffer[BUFFER_SIZE];
-    time_t now;
-    struct tm *timeinfo;
-    
-    // Obtenir le temps actuel (secondes depuis 01/01/1970)
-    time(&now);
-    
-    // Convertir en structure tm (temps local avec jour, mois, etc.)
-    timeinfo = localtime(&now);
-    
-    // Formater en chaîne lisible
-    // %d = jour (01-31)
-    // %m = mois (01-12)
-    // %Y = année (4 chiffres)
-    // %H = heure 24h (00-23)
-    // %M = minutes (00-59)
-    // %S = secondes (00-59)
-    strftime(buffer, BUFFER_SIZE, "Date: %d/%m/%Y - Heure: %H:%M:%S", timeinfo);
-    
-    // Envoyer la chaîne formatée au client
-    write(client_sockfd, buffer, strlen(buffer) + 1);
-    printf("[PID %d] Service DATE envoye\n", getpid());
-}
-
-/* ============================================================================
- * SERVICE 2 : LISTE DES FICHIERS D'UN RÉPERTOIRE
- * ============================================================================
- * Lit tous les fichiers d'un répertoire et envoie la liste au client
- * Utilise les fonctions opendir(), readdir(), closedir()
- * ============================================================================ */
-void service_liste_fichiers(int client_sockfd) {
-    char chemin[256];
-    char buffer[BUFFER_SIZE];
-    DIR *dir;                   // Pointeur vers le flux répertoire
-    struct dirent *entry;       // Structure pour chaque entrée du répertoire
-    
-    /* ------------------------------------------------------------------------
-     * RÉCEPTION DU CHEMIN DU RÉPERTOIRE
-     * ------------------------------------------------------------------------ */
-    
-    memset(chemin, 0, sizeof(chemin));
-    read(client_sockfd, chemin, sizeof(chemin));
-    
-    printf("[PID %d] Liste fichiers de: %s\n", getpid(), chemin);
-    
-    /* ------------------------------------------------------------------------
-     * OUVERTURE DU RÉPERTOIRE
-     * ------------------------------------------------------------------------ */
-    
-    // opendir() retourne un pointeur DIR* ou NULL si erreur
-    // Causes d'erreur : répertoire inexistant, pas de permissions, etc.
-    dir = opendir(chemin);
-    if (dir == NULL) {
-        sprintf(buffer, "Erreur: Impossible d'ouvrir le repertoire");
-        write(client_sockfd, buffer, strlen(buffer) + 1);
-        return;
-    }
-    
-    /* ------------------------------------------------------------------------
-     * LECTURE DE TOUTES LES ENTRÉES
-     * ------------------------------------------------------------------------ */
-    
-    memset(buffer, 0, BUFFER_SIZE);
-    
-    // readdir() retourne un pointeur vers l'entrée suivante
-    // Retourne NULL quand il n'y a plus d'entrées
-    // Boucle : lire toutes les entrées jusqu'à la fin
-    while ((entry = readdir(dir)) != NULL) {
-        // entry->d_name contient le nom du fichier/répertoire
-        strcat(buffer, entry->d_name);  // Ajouter le nom au buffer
-        strcat(buffer, "\n");            // Ajouter un retour à la ligne
-    }
-    
-    // Fermer le répertoire
-    closedir(dir);
-    
-    /* ------------------------------------------------------------------------
-     * ENVOI DE LA LISTE AU CLIENT
-     * ------------------------------------------------------------------------ */
-    
-    write(client_sockfd, buffer, strlen(buffer) + 1);
-    printf("[PID %d] Liste envoyee\n", getpid());
-}
-
-/* ============================================================================
- * SERVICE 3 : CONTENU D'UN FICHIER
- * ============================================================================
- * Lit le contenu d'un fichier texte et l'envoie au client
- * Utilise les fonctions fopen(), fread(), fclose()
- * ============================================================================ */
-void service_contenu_fichier(int client_sockfd) {
-    char nom_fichier[256];
-    char buffer[BUFFER_SIZE];
-    FILE *file;                  // Pointeur vers le flux fichier
-    int n;                       // Nombre d'octets lus
-    
-    /* ------------------------------------------------------------------------
-     * RÉCEPTION DU NOM DU FICHIER
-     * ------------------------------------------------------------------------ */
-    
-    memset(nom_fichier, 0, sizeof(nom_fichier));
-    read(client_sockfd, nom_fichier, sizeof(nom_fichier));
-    
-    printf("[PID %d] Contenu fichier: %s\n", getpid(), nom_fichier);
-    
-    /* ------------------------------------------------------------------------
-     * OUVERTURE DU FICHIER EN LECTURE
-     * ------------------------------------------------------------------------ */
-    
-    // fopen(chemin, mode)
-    // "r" = read (lecture)
-    // Retourne un pointeur FILE* ou NULL si erreur
-    file = fopen(nom_fichier, "r");
-    if (file == NULL) {
-        sprintf(buffer, "Erreur: Impossible d'ouvrir le fichier");
-        write(client_sockfd, buffer, strlen(buffer) + 1);
-        return;
-    }
-    
-    /* ------------------------------------------------------------------------
-     * LECTURE DU CONTENU
-     * ------------------------------------------------------------------------ */
-    
-    memset(buffer, 0, BUFFER_SIZE);
-    
-    // fread(buffer, taille_element, nombre_elements, fichier)
-    // Ici : lire BUFFER_SIZE-1 octets de 1 octet chacun
-    // On garde 1 octet pour le '\0' final
-    // Retourne : nombre d'éléments lus
-    n = fread(buffer, 1, BUFFER_SIZE - 1, file);
-    
-    // Ajouter le '\0' de fin de chaîne
-    buffer[n] = '\0';
-    
-    // Fermer le fichier
-    fclose(file);
-    
-    /* ------------------------------------------------------------------------
-     * ENVOI DU CONTENU AU CLIENT
-     * ------------------------------------------------------------------------ */
-    
-    write(client_sockfd, buffer, strlen(buffer) + 1);
-    printf("[PID %d] Contenu envoye (%d octets)\n", getpid(), n);
-}
-
-/* ============================================================================
- * SERVICE 4 : DURÉE DE CONNEXION
- * ============================================================================
- * Calcule le temps écoulé depuis la connexion du client
- * Utilise la fonction difftime() pour calculer la différence
- * ============================================================================ */
-void service_duree_connexion(int client_sockfd, time_t debut) {
-    char buffer[BUFFER_SIZE];
-    time_t maintenant;
-    int duree_sec, minutes, secondes;
-    
-    /* ------------------------------------------------------------------------
-     * CALCUL DE LA DURÉE
-     * ------------------------------------------------------------------------ */
-    
-    // Obtenir l'heure actuelle
-    time(&maintenant);
-    
-    // difftime(temps_final, temps_initial)
-    // Retourne la différence en secondes (type double)
-    // On cast en int car on n'a pas besoin de précision sub-seconde
-    duree_sec = (int)difftime(maintenant, debut);
-    
-    // Convertir en minutes et secondes
-    minutes = duree_sec / 60;        // Division entière
-    secondes = duree_sec % 60;       // Reste de la division (modulo)
-    
-    /* ------------------------------------------------------------------------
-     * FORMATAGE ET ENVOI
-     * ------------------------------------------------------------------------ */
-    
-    // sprintf() = printf() dans un buffer
-    sprintf(buffer, "Duree de connexion: %d minute(s) et %d seconde(s)", 
-            minutes, secondes);
-    
-    write(client_sockfd, buffer, strlen(buffer) + 1);
-    printf("[PID %d] Duree connexion envoyee: %d:%d\n", getpid(), minutes, secondes);
-}
-
-/* ============================================================================
- * FONCTION POUR TRAITER UN CLIENT
- * ============================================================================
- * Exécutée par chaque processus fils
- * Gère l'authentification et la boucle de services
- * ============================================================================ */
-void traiter_client(int client_sockfd) {
-    char username[50], password[50];
-    int choix;
-    int auth_ok;
-    time_t debut_connexion;  // Heure de début pour le service 4
-    
-    printf("[PID %d] Nouveau client\n", getpid());
-    
-    /* ========================================================================
-     * ENREGISTRER L'HEURE DE CONNEXION
-     * ======================================================================== */
-    
-    // Sauvegarder l'heure actuelle pour calculer la durée plus tard
-    time(&debut_connexion);
-
-    /* ========================================================================
-     * AUTHENTIFICATION
-     * ======================================================================== */
-    
-    memset(username, 0, sizeof(username));
-    read(client_sockfd, username, sizeof(username));
-
-    memset(password, 0, sizeof(password));
-    read(client_sockfd, password, sizeof(password));
-
-    printf("[PID %d] Username: %s, Password: %s\n", getpid(), username, password);
-
-    // ⚠️ MODIFIEZ LE MOT DE PASSE ICI
-    if (strcmp(username, "admin") == 0 && strcmp(password, "admin123") == 0) {
-        auth_ok = 1;
-        printf("[PID %d] Auth OK\n", getpid());
-    } else {
-        auth_ok = 0;
-        printf("[PID %d] Auth ECHEC\n", getpid());
-    }
-
-    write(client_sockfd, &auth_ok, sizeof(int));
-
-    if (auth_ok == 0) {
-        close(client_sockfd);
-        exit(0);
-    }
-
-    /* ========================================================================
-     * BOUCLE DE TRAITEMENT DES SERVICES
-     * ======================================================================== */
-    
-    while (1) {
-        
-        /* --------------------------------------------------------------------
-         * RÉCEPTION DU CHOIX DU CLIENT
-         * -------------------------------------------------------------------- */
-        
-        int n = read(client_sockfd, &choix, sizeof(int));
-        if (n <= 0) {
-            printf("[PID %d] Client deconnecte\n", getpid());
-            break;
-        }
-
-        printf("[PID %d] Service demande: %d\n", getpid(), choix);
-
-        /* --------------------------------------------------------------------
-         * DISPATCH VERS LE SERVICE APPROPRIÉ
-         * -------------------------------------------------------------------- */
-        
-        // switch/case : exécuter du code différent selon la valeur de choix
-        switch(choix) {
-            case SERVICE_FIN:
-                // Client veut se déconnecter
-                printf("[PID %d] Client quitte\n", getpid());
-                goto fin;  // goto pour sortir de la boucle et du switch
-                
-            case SERVICE_DATE:
-                // Appeler la fonction service_date()
-                service_date(client_sockfd);
-                break;  // Sortir du switch, continuer la boucle
-                
-            case SERVICE_LISTE_FICHIERS:
-                service_liste_fichiers(client_sockfd);
-                break;
-                
-            case SERVICE_CONTENU_FICHIER:
-                service_contenu_fichier(client_sockfd);
-                break;
-                
-            case SERVICE_DUREE_CONNEXION:
-                // Passer l'heure de début enregistrée au début
-                service_duree_connexion(client_sockfd, debut_connexion);
-                break;
-                
-            default:
-                // Choix invalide
-                printf("[PID %d] Service invalide\n", getpid());
-        }
-    }
-
-    /* ------------------------------------------------------------------------
-     * FIN DU TRAITEMENT
-     * ------------------------------------------------------------------------ */
-    
-fin:  // Label pour le goto
-    close(client_sockfd);
-    printf("[PID %d] Fin du processus\n", getpid());
-    exit(0);  // Terminer le processus fils
-}
-
-/* ============================================================================
- * FONCTION PRINCIPALE (PROCESSUS PÈRE)
- * ============================================================================ */
-int main(int argc, char *argv[]) {
-    
-    int sockfd, client_sockfd;
-    struct sockaddr_in serveur_addr, client_addr;
-    socklen_t client_len;
-    int port;
-    int option = 1;
-    pid_t pid;
-
-    /* ------------------------------------------------------------------------
-     * VÉRIFICATION DES ARGUMENTS
-     * ------------------------------------------------------------------------ */
-    
-    if (argc != 2) {
-        printf("Usage: %s <port>\n", argv[0]);
-        exit(1);
-    }
-
-    port = atoi(argv[1]);
-
-    /* ------------------------------------------------------------------------
-     * INSTALLATION DU GESTIONNAIRE DE SIGNAL
-     * ------------------------------------------------------------------------ */
-    
-    signal(SIGCHLD, gestionnaire_sigchld);
-
-    /* ------------------------------------------------------------------------
-     * CRÉATION ET CONFIGURATION DU SOCKET
-     * ------------------------------------------------------------------------ */
-    
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+/*
+ * Créer un socket serveur
+ */
+int creer_socket_serveur(int port) {
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
-        perror("Erreur socket");
-        exit(1);
+        perror("socket");
+        return -1;
     }
-
+    
+    int option = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &option, sizeof(option));
-
-    memset(&serveur_addr, 0, sizeof(serveur_addr));
-    serveur_addr.sin_family = AF_INET;
-    serveur_addr.sin_addr.s_addr = INADDR_ANY;
-    serveur_addr.sin_port = htons(port);
-
-    if (bind(sockfd, (struct sockaddr *)&serveur_addr, 
-             sizeof(serveur_addr)) < 0) {
-        perror("Erreur bind");
-        exit(1);
+    
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(port);
+    
+    if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        perror("bind");
+        close(sockfd);
+        return -1;
     }
-
-    listen(sockfd, 5);
-
-    /* ------------------------------------------------------------------------
-     * AFFICHAGE DES INFORMATIONS DU SERVEUR
-     * ------------------------------------------------------------------------ */
     
-    printf("===========================================\n");
-    printf("  SERVEUR MULTISERVICE (port %d)          \n", port);
-    printf("===========================================\n");
-    printf("Compte: admin / admin123\n");
-    printf("Services disponibles:\n");
-    printf("  [1] Date et Heure\n");
-    printf("  [2] Liste des fichiers\n");
-    printf("  [3] Contenu d'un fichier\n");
-    printf("  [4] Duree de connexion\n");
-    printf("===========================================\n");
-    printf("En attente de clients...\n\n");
-
-    /* ========================================================================
-     * BOUCLE PRINCIPALE - ACCEPTER ET FORKER
-     * ======================================================================== */
+    if (listen(sockfd, 5) < 0) {
+        perror("listen");
+        close(sockfd);
+        return -1;
+    }
     
-    while (1) {
-        client_len = sizeof(client_addr);
-        client_sockfd = accept(sockfd, (struct sockaddr *)&client_addr, 
-                               &client_len);
+    return sockfd;
+}
+
+/*
+ * SERVICE AUTH: Authentification
+ */
+void* thread_service_auth(void* arg) {
+    char log_msg[256];
+    
+    while (serveur_actif) {
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
         
-        if (client_sockfd < 0) {
-            perror("Erreur accept");
+        int client_sock = accept(sockfd_auth, 
+                                (struct sockaddr *)&client_addr, &client_len);
+        if (client_sock < 0) {
+            if (serveur_actif) {
+                perror("accept auth");
+            }
             continue;
         }
-
-        printf("\n[SERVEUR] Nouveau client connecte!\n");
-
-        // Créer un processus fils pour ce client
-        pid = fork();
-
-        if (pid < 0) {
-            perror("Erreur fork");
-            close(client_sockfd);
-            continue;
-        }
-
-        if (pid == 0) {
-            // PROCESSUS FILS
-            close(sockfd);
-            traiter_client(client_sockfd);
-            // traiter_client() fait exit(0)
+        
+        sprintf(log_msg, "🔐 [AUTH] Nouvelle demande d'authentification\n");
+        afficher_log(log_msg);
+        
+        char username[50], password[50];
+        
+        memset(username, 0, sizeof(username));
+        read(client_sock, username, sizeof(username));
+        
+        memset(password, 0, sizeof(password));
+        read(client_sock, password, sizeof(password));
+        
+        int auth_ok;
+        if (strcmp(username, global_username) == 0 && 
+            strcmp(password, global_password) == 0) {
+            auth_ok = AUTH_SUCCESS;
+            sprintf(log_msg, "   ✅ Authentification OK pour: %s\n", username);
         } else {
-            // PROCESSUS PÈRE
-            close(client_sockfd);
-            printf("[SERVEUR] Client gere par processus %d\n", pid);
+            auth_ok = AUTH_FAILURE;
+            sprintf(log_msg, "   ❌ Authentification ÉCHEC pour: %s\n", username);
         }
+        afficher_log(log_msg);
+        
+        write(client_sock, &auth_ok, sizeof(int));
+        close(client_sock);
     }
+    
+    return NULL;
+}
 
-    close(sockfd);
+/*
+ * SERVICE 1: Date et Heure
+ */
+void* thread_service_date(void* arg) {
+    char log_msg[256];
+    
+    while (serveur_actif) {
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
+        
+        int client_sock = accept(sockfd_date, 
+                                (struct sockaddr *)&client_addr, &client_len);
+        if (client_sock < 0) {
+            if (serveur_actif) {
+                perror("accept date");
+            }
+            continue;
+        }
+        
+        sprintf(log_msg, "📅 [DATE] Demande de date/heure\n");
+        afficher_log(log_msg);
+        
+        char buffer[BUFFER_SIZE];
+        time_t now;
+        struct tm *timeinfo;
+        
+        time(&now);
+        timeinfo = localtime(&now);
+        strftime(buffer, BUFFER_SIZE, "Date: %d/%m/%Y - Heure: %H:%M:%S", timeinfo);
+        
+        write(client_sock, buffer, strlen(buffer) + 1);
+        afficher_log("   ✅ Date/Heure envoyée\n");
+        
+        close(client_sock);
+    }
+    
+    return NULL;
+}
+
+/*
+ * SERVICE 2: Liste des fichiers
+ */
+void* thread_service_liste(void* arg) {
+    char log_msg[512];
+    
+    while (serveur_actif) {
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
+        
+        int client_sock = accept(sockfd_liste, 
+                                (struct sockaddr *)&client_addr, &client_len);
+        if (client_sock < 0) {
+            if (serveur_actif) {
+                perror("accept liste");
+            }
+            continue;
+        }
+        
+        char chemin[256];
+        char buffer[BUFFER_SIZE];
+        
+        memset(chemin, 0, sizeof(chemin));
+        read(client_sock, chemin, sizeof(chemin));
+        
+        snprintf(log_msg, sizeof(log_msg), "📂 [LISTE] Demande pour: %s\n", chemin);
+        afficher_log(log_msg);
+        
+        DIR *dir = opendir(chemin);
+        if (dir == NULL) {
+            sprintf(buffer, "Erreur: Impossible d'ouvrir le répertoire");
+            afficher_log("   ❌ Erreur d'ouverture\n");
+        } else {
+            memset(buffer, 0, BUFFER_SIZE);
+            struct dirent *entry;
+            while ((entry = readdir(dir)) != NULL) {
+                strcat(buffer, entry->d_name);
+                strcat(buffer, "\n");
+            }
+            closedir(dir);
+            afficher_log("   ✅ Liste envoyée\n");
+        }
+        
+        write(client_sock, buffer, strlen(buffer) + 1);
+        close(client_sock);
+    }
+    
+    return NULL;
+}
+
+/*
+ * SERVICE 3: Contenu fichier
+ */
+void* thread_service_contenu(void* arg) {
+    char log_msg[512];
+    
+    while (serveur_actif) {
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
+        
+        int client_sock = accept(sockfd_contenu, 
+                                (struct sockaddr *)&client_addr, &client_len);
+        if (client_sock < 0) {
+            if (serveur_actif) {
+                perror("accept contenu");
+            }
+            continue;
+        }
+        
+        char nom_fichier[256];
+        char buffer[BUFFER_SIZE];
+        
+        memset(nom_fichier, 0, sizeof(nom_fichier));
+        read(client_sock, nom_fichier, sizeof(nom_fichier));
+        
+        snprintf(log_msg, sizeof(log_msg), "📄 [CONTENU] Demande pour: %s\n", nom_fichier);
+        afficher_log(log_msg);
+        
+        FILE *file = fopen(nom_fichier, "r");
+        if (file == NULL) {
+            sprintf(buffer, "Erreur: Impossible d'ouvrir le fichier");
+            afficher_log("   ❌ Erreur d'ouverture\n");
+        } else {
+            memset(buffer, 0, BUFFER_SIZE);
+            int n = fread(buffer, 1, BUFFER_SIZE - 1, file);
+            buffer[n] = '\0';
+            fclose(file);
+            snprintf(log_msg, sizeof(log_msg), "   ✅ Contenu envoyé (%d octets)\n", n);
+            afficher_log(log_msg);
+        }
+        
+        write(client_sock, buffer, strlen(buffer) + 1);
+        close(client_sock);
+    }
+    
+    return NULL;
+}
+
+/*
+ * SERVICE 4: Durée connexion
+ */
+void* thread_service_duree(void* arg) {
+    char log_msg[512];
+    
+    while (serveur_actif) {
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
+        
+        int client_sock = accept(sockfd_duree, 
+                                (struct sockaddr *)&client_addr, &client_len);
+        if (client_sock < 0) {
+            if (serveur_actif) {
+                perror("accept duree");
+            }
+            continue;
+        }
+        
+        afficher_log("⏱️ [DURÉE] Demande de durée\n");
+        
+        time_t debut;
+        read(client_sock, &debut, sizeof(time_t));
+        
+        char buffer[BUFFER_SIZE];
+        time_t maintenant;
+        time(&maintenant);
+        int duree_sec = (int)difftime(maintenant, debut);
+        int minutes = duree_sec / 60;
+        int secondes = duree_sec % 60;
+        
+        sprintf(buffer, "Durée de connexion: %d minute(s) et %d seconde(s)", 
+                minutes, secondes);
+        
+        write(client_sock, buffer, strlen(buffer) + 1);
+        snprintf(log_msg, sizeof(log_msg), "   ✅ Durée envoyée: %d:%02d\n", minutes, secondes);
+        afficher_log(log_msg);
+        
+        close(client_sock);
+    }
+    
+    return NULL;
+}
+
+/*
+ * Gestionnaire de signal SIGINT (Ctrl+C)
+ */
+void gestionnaire_sigint(int sig) {
+    printf("\n\n🛑 Arrêt du serveur...\n");
+    serveur_actif = 0;
+    
+    // Fermer les sockets pour débloquer les accept()
+    if (sockfd_auth >= 0) { shutdown(sockfd_auth, SHUT_RDWR); close(sockfd_auth); }
+    if (sockfd_date >= 0) { shutdown(sockfd_date, SHUT_RDWR); close(sockfd_date); }
+    if (sockfd_liste >= 0) { shutdown(sockfd_liste, SHUT_RDWR); close(sockfd_liste); }
+    if (sockfd_contenu >= 0) { shutdown(sockfd_contenu, SHUT_RDWR); close(sockfd_contenu); }
+    if (sockfd_duree >= 0) { shutdown(sockfd_duree, SHUT_RDWR); close(sockfd_duree); }
+}
+
+/*
+ * MAIN
+ */
+int main(int argc, char *argv[]) {
+    pthread_t threads[5];
+    
+    // Vérifier les arguments
+    if (argc != 3) {
+        printf("Usage: %s <username> <password>\n", argv[0]);
+        printf("Exemple: %s admin admin123\n", argv[0]);
+        return 1;
+    }
+    
+    strcpy(global_username, argv[1]);
+    strcpy(global_password, argv[2]);
+    
+    // Installer le gestionnaire de signal
+    signal(SIGINT, gestionnaire_sigint);
+    signal(SIGPIPE, SIG_IGN);
+    
+    printf("\n");
+    printf("╔═══════════════════════════════════════╗\n");
+    printf("║   SERVEUR TCP MULTISERVICE DÉMARRÉ    ║\n");
+    printf("╚═══════════════════════════════════════╝\n");
+    printf("👤 Compte: %s / %s\n", global_username, global_password);
+    printf("📋 Services disponibles:\n");
+    printf("   🔐 Auth:     Port %d\n", PORT_AUTH);
+    printf("   📅 Date:     Port %d\n", PORT_DATE);
+    printf("   📂 Liste:    Port %d\n", PORT_LISTE);
+    printf("   📄 Contenu:  Port %d\n", PORT_CONTENU);
+    printf("   ⏱️  Durée:    Port %d\n", PORT_DUREE);
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    
+    // Créer les sockets
+    printf("🔧 Création des sockets...\n");
+    sockfd_auth = creer_socket_serveur(PORT_AUTH);
+    sockfd_date = creer_socket_serveur(PORT_DATE);
+    sockfd_liste = creer_socket_serveur(PORT_LISTE);
+    sockfd_contenu = creer_socket_serveur(PORT_CONTENU);
+    sockfd_duree = creer_socket_serveur(PORT_DUREE);
+    
+    if (sockfd_auth < 0 || sockfd_date < 0 || sockfd_liste < 0 || 
+        sockfd_contenu < 0 || sockfd_duree < 0) {
+        fprintf(stderr, "❌ Erreur: Impossible de créer les sockets\n");
+        return 1;
+    }
+    
+    printf("✅ Tous les sockets créés\n");
+    printf("👂 En attente de clients...\n");
+    printf("   (Ctrl+C pour arrêter)\n\n");
+    
+    // Lancer les threads
+    pthread_create(&threads[0], NULL, thread_service_auth, NULL);
+    pthread_create(&threads[1], NULL, thread_service_date, NULL);
+    pthread_create(&threads[2], NULL, thread_service_liste, NULL);
+    pthread_create(&threads[3], NULL, thread_service_contenu, NULL);
+    pthread_create(&threads[4], NULL, thread_service_duree, NULL);
+    
+    // Attendre les threads
+    for (int i = 0; i < 5; i++) {
+        pthread_join(threads[i], NULL);
+    }
+    
+    printf("✅ Serveur arrêté proprement\n\n");
+    
     return 0;
 }

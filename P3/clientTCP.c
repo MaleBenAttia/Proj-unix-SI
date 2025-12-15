@@ -5,7 +5,7 @@
  * Services : Date et Heure du serveur
  * Utilisation : ./clientTCP <nom_serveur> <port>
  * Exemple : ./clientTCP localhost 6000
- * Auteur : [Votre Nom]
+ * Auteur : Malek Ben Attia et salim Younes
  * Date : Décembre 2025
  * ============================================================================
  */

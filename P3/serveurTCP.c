@@ -5,7 +5,7 @@
  * Chaque client est géré par un processus fils indépendant
  * Utilisation : ./serveurTCP <port>
  * Exemple : ./serveurTCP 6000
- * Auteur : [Votre Nom]
+ * Auteur : Malek Ben Attia et Salim Younes
  * Date : Décembre 2025
  * ============================================================================
  */

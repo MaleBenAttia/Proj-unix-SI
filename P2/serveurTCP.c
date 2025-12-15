@@ -6,7 +6,7 @@
  * Utilisation : ./serveurTCP <port>
  * Exemple : ./serveurTCP 6000
  * Compte : admin / admin123
- * Auteur : [Votre Nom]
+ * Auteur : Malek Ben Attia et salim Younes
  * Date : Décembre 2025
  * ============================================================================
  */

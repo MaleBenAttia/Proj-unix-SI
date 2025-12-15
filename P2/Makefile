@@ -1,7 +1,7 @@
 ##############################################################################
 # Fichier : Makefile
 # Description : Compilation automatique Client/Serveur TCP Phase 1
-# Auteur : [Votre Nom]
+# Auteur : Malek Ben Attia et salim Younes
 # Date : Décembre 2025
 ##############################################################################
 

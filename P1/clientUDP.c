@@ -4,7 +4,7 @@
  * Description : Client UDP - Envoie un nombre n et reçoit n nombres aléatoires
  * Utilisation : ./clientUDP <nom_serveur> <port>
  * Exemple : ./clientUDP localhost 5000
- * Auteur : [Votre Nom]
+ * Auteur : Malek Ben Attia et salim Younes
  * Date : Décembre 2025
  * ============================================================================
  */
